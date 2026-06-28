@@ -5,11 +5,8 @@ import io
 from datetime import datetime, timedelta
 from openpyxl.styles import PatternFill
 
-# 設定網頁標題與排版
 st.set_page_config(page_title="服務幫手整合工具 (行動版)", layout="centered")
 st.title("🤖 服務幫手整合工具")
-
-# ---- 以下保留你原本的核心數據邏輯 ----
 
 def assign_shift(time):
     morning = datetime.strptime('06:00', '%H:%M').time()
@@ -95,11 +92,8 @@ def normalize_na(s: pd.Series) -> pd.Series:
     s = s.astype(str).str.strip()
     return s.replace({'': pd.NA, 'nan': pd.NA, 'NaN': pd.NA, 'None': pd.NA, '-': pd.NA, 'N/A': pd.NA, 'NA': pd.NA})
 
-# ---- 網頁版核心資料處理流程（改為記憶體內處理，不落地讀寫檔案） ----
 def process_data_web(uploaded_main_file, uploaded_store_file):
     df = pd.read_excel(uploaded_main_file)
-    
-    # 讀取選填的「所有門店.xlsx」
     if uploaded_store_file is not None:
         try:
             manual_stores = pd.read_excel(uploaded_store_file, header=None)[0].dropna().unique().tolist()
@@ -127,7 +121,6 @@ def process_data_web(uploaded_main_file, uploaded_store_file):
     df_bar_delivery = df_delivery[df_delivery['机器人序列号'].isin(bar_robot_serials)].copy()
     df_bar_reception = df_reception[df_reception['机器人序列号'].isin(bar_robot_serials)].copy()
 
-    # --- 建立 整合報表 記憶體緩衝區 ---
     main_buffer = io.BytesIO()
     with pd.ExcelWriter(main_buffer, engine='openpyxl') as writer:
         df.to_excel(writer, sheet_name='原始數據', index=False)
@@ -190,7 +183,6 @@ def process_data_web(uploaded_main_file, uploaded_store_file):
             daily_sum = pd.DataFrame(columns=['日期','门店名称','提醒筆數'])
         daily_sum.to_excel(writer, sheet_name='提醒_日別統計', index=False)
 
-        # 11點前送餐紀錄
         eleven_time = datetime.strptime('11:00', '%H:%M').time()
         before_11_mask = df_delivery['時間'] < eleven_time if '時間' in df_delivery.columns else df_delivery['任务开始时间'].dt.time < eleven_time
 
@@ -199,7 +191,6 @@ def process_data_web(uploaded_main_file, uploaded_store_file):
         before_11_sheet = '異常_11點前送餐'
         before_11_df.to_excel(writer, sheet_name=before_11_sheet, index=False)
 
-        # --- 收集網頁提示警訊資訊 ---
         alert_before_11 = []
         if not before_11_df.empty and ('门店名称' in before_11_df.columns):
             b11_store = before_11_df.groupby('门店名称', dropna=False).size().reset_index(name='11點前筆數')
@@ -208,7 +199,6 @@ def process_data_web(uploaded_main_file, uploaded_store_file):
         half_hour_stats = calculate_delivery_counts(df_delivery, all_stores, '半小時時段')
         half_hour_stats.to_excel(writer, sheet_name='半小時送餐統計', index=False)
 
-        # 忙碌時段為 0 警示
         busy_periods = [
             ('午班', ['12:00', '12:30', '13:00', '13:30']),
             ('晚班', ['17:30', '18:00', '18:30', '19:00', '19:30', '20:00', '20:30'])
@@ -225,7 +215,6 @@ def process_data_web(uploaded_main_file, uploaded_store_file):
                     if sub_df['餐盤總數'].sum() == 0:
                         zero_alerts.append(f"⚠️ {store} {date} {shift_name}")
 
-        # 其他常規統計分頁寫入
         calculate_delivery_counts(df_delivery, all_stores, '班次') \
             .pivot_table(index=['门店名称','日期'], columns='時段', values='餐盤總數', fill_value=0) \
             .reset_index().to_excel(writer, sheet_name='班次送餐統計', index=False)
@@ -237,7 +226,6 @@ def process_data_web(uploaded_main_file, uploaded_store_file):
             .pivot_table(index=['门店名称','日期'], columns='時段', values='目標點總數', fill_value=0) \
             .reset_index().to_excel(writer, sheet_name='班次收餐統計', index=False)
 
-        # 返程效率
         delivery_time_column = '送餐总用时（s）'
         return_time_column = '返回总用时（s）'
         if delivery_time_column in df.columns and return_time_column in df.columns:
@@ -259,26 +247,24 @@ def process_data_web(uploaded_main_file, uploaded_store_file):
             df_filtered_return.to_excel(writer, sheet_name='返回符合條件的數據', index=False)
             summary_df.to_excel(writer, sheet_name='每日餐期計算結果', index=False)
 
-        # 吧台專屬
         calculate_delivery_counts(df_bar_delivery, all_stores, '半小時時段').to_excel(writer, sheet_name='吧台_半小時送餐統計', index=False)
-        吧台班次送餐 = calculate_delivery_counts(df_bar_delivery, all_stores, '班次')
-        吧台班次送餐透視表 = 吧台班次送餐.pivot_table(index=['门店名称', '日期'], columns='時段', values='餐盤總數', fill_value=0)
+        bar_shift_del = calculate_delivery_counts(df_bar_delivery, all_stores, '班次')
+        bar_shift_del_pivot = bar_shift_del.pivot_table(index=['门店名称', '日期'], columns='時段', values='餐盤總數', fill_value=0)
         for col in ['早班', '午班', '晚班']:
-            if col not in 吧台班次送餐透視表.columns: 吧台班次送餐透視表[col] = 0
-        吧台班次送餐透視表 = 吧台班次送餐透視表[['午班', '晚班', '早班']].reset_index()
-        吧台班次送餐透視表.to_excel(writer, sheet_name='吧台_班次送餐統計', index=False)
+            if col not in bar_shift_del_pivot.columns: bar_shift_del_pivot[col] = 0
+        bar_shift_del_pivot = bar_shift_del_pivot[['午班', '晚班', '早班']].reset_index()
+        bar_shift_del_pivot.to_excel(writer, sheet_name='吧台_班次送餐統計', index=False)
 
         calculate_reception_counts(df_bar_reception, all_stores, '半小時時段').to_excel(writer, sheet_name='吧台_半小時收餐統計', index=False)
-        吧台班次收餐 = calculate_reception_counts(df_bar_reception, all_stores, '班次')
-        吧台班次收餐透視表 = 吧台班次收餐.pivot_table(index=['门店名称', '日期'], columns='時段', values='目標點總數', fill_value=0)
+        bar_shift_rec = calculate_reception_counts(df_bar_reception, all_stores, '班次')
+        bar_shift_rec_pivot = bar_shift_rec.pivot_table(index=['门店名称', '日期'], columns='時段', values='目標點總數', fill_value=0)
         for col in ['早班', '午班', '晚班']:
-            if col not in 吧台班次收餐透視表.columns: 吧台班次收餐透視表[col] = 0
-        吧台班次收餐透視表 = 吧台班次收餐透視表[['午班', '晚班', '早班']].reset_index()
-        吧台班次收餐透視表.to_excel(writer, sheet_name='吧台_班次收餐統計', index=False)
+            if col not in bar_shift_rec_pivot.columns: bar_shift_rec_pivot[col] = 0
+        bar_shift_rec_pivot = bar_shift_rec_pivot[['午班', '晚班', '早班']].reset_index()
+        bar_shift_rec_pivot.to_excel(writer, sheet_name='吧台_班次收餐統計', index=False)
     
     main_buffer.seek(0)
 
-    # --- 建立 獨立異常報表 記憶體緩衝區 ---
     anomaly_buffer = io.BytesIO()
     with pd.ExcelWriter(anomaly_buffer, engine='openpyxl') as w2:
         severe_df.to_excel(w2, sheet_name='異常_嚴重', index=False)
@@ -302,12 +288,8 @@ def process_data_web(uploaded_main_file, uploaded_store_file):
         daily_rem.to_excel(w2, sheet_name='提醒_日別統計', index=False)
         
     anomaly_buffer.seek(0)
-    
     return main_buffer, anomaly_buffer, alert_before_11, zero_alerts
 
-# ---- 🧱 Streamlit 網頁操作介面 ----
-
-# 1. 檔案上傳區
 uploaded_main = st.file_uploader("1. 請上傳 機器人原始數據 Excel (*.xlsx)", type=["xlsx"])
 uploaded_stores = st.file_uploader("2. 選擇性上傳 所有門店清單 (所有門店.xlsx，若無可不傳)", type=["xlsx"])
 
@@ -318,10 +300,7 @@ if uploaded_main:
         with st.spinner("正在進行大數據清洗與餐期計算中..."):
             try:
                 main_file, anomaly_file, alert_b11, alert_zero = process_data_web(uploaded_main, uploaded_stores)
-                
                 st.success("🎉 報表計算完成！請點選下方按鈕下載：")
-                
-                # 下載按鈕 (手機可以直接儲存至檔案)
                 today_str = datetime.today().strftime("%Y%m%d")
                 
                 col1, col2 = st.columns(2)
@@ -342,19 +321,14 @@ if uploaded_main:
                         use_container_width=True
                     )
                 
-                # --- 網頁警告訊息區 (取代原本的 messagebox 彈窗) ---
                 if alert_b11 or alert_zero:
                     st.write("---")
                     st.subheader("📊 數據重點異常提示")
-                    
                     if alert_b11:
                         with st.status("⚠️ 發現 11 點前送餐紀錄", expanded=True):
-                            for item in alert_b11:
-                                st.write(item)
-                                
+                            for item in alert_b11: st.write(item)
                     if alert_zero:
                         with st.status("⚠️ 發現 忙碌時段送餐量為 0 之門市", expanded=True):
-                            for item in alert_zero:
-                                st.write(item)
+                            for item in alert_zero: st.write(item)
             except Exception as e:
                 st.error(f"計算失敗，請檢查欄位格式是否正確。錯誤訊息: {e}")
